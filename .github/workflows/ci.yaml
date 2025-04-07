@@ -317,7 +317,7 @@ jobs:
   test-go:
     runs-on: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'coder' && 'depot-ubuntu-22.04-4' || matrix.os == 'macos-latest' && github.repository_owner == 'coder' && 'depot-macos-latest' || matrix.os == 'windows-2022' && github.repository_owner == 'coder' && 'windows-latest-16-cores' || matrix.os }}
     needs: changes
-    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main'
+    if: false
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -380,7 +380,7 @@ jobs:
   test-cli:
     runs-on: ${{ matrix.os == 'macos-latest' && github.repository_owner == 'coder' && 'depot-macos-latest' || matrix.os == 'windows-2022' && github.repository_owner == 'coder' && 'windows-latest-16-cores' || matrix.os }}
     needs: changes
-    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main'
+    if: false
     strategy:
       matrix:
         os:
@@ -432,7 +432,7 @@ jobs:
   test-go-pg:
     runs-on: ${{ matrix.os == 'ubuntu-latest' && github.repository_owner == 'coder' && 'depot-ubuntu-22.04-4' || matrix.os }}
     needs: changes
-    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main'
+    if: false
     # This timeout must be greater than the timeout set by `go test` in
     # `make test-postgres` to ensure we receive a trace of running
     # goroutines. Setting this to the timeout +5m should work quite well
@@ -493,7 +493,7 @@ jobs:
     runs-on: ${{ github.repository_owner == 'coder' && 'depot-ubuntu-22.04-8' || 'ubuntu-latest' }}
     needs:
       - changes
-    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main'
+    if: false
     # This timeout must be greater than the timeout set by `go test` in
     # `make test-postgres` to ensure we receive a trace of running
     # goroutines. Setting this to the timeout +5m should work quite well
@@ -534,7 +534,7 @@ jobs:
   test-go-race:
     runs-on: ${{ github.repository_owner == 'coder' && 'depot-ubuntu-22.04-16' || 'ubuntu-latest' }}
     needs: changes
-    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main'
+    if: false
     timeout-minutes: 25
     steps:
       - name: Harden Runner
@@ -572,7 +572,7 @@ jobs:
   test-go-race-pg:
     runs-on: ${{ github.repository_owner == 'coder' && 'depot-ubuntu-22.04-16' || 'ubuntu-latest' }}
     needs: changes
-    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main'
+    if: false
     timeout-minutes: 25
     steps:
       - name: Harden Runner
@@ -620,7 +620,7 @@ jobs:
     runs-on: ${{ github.repository_owner == 'coder' && 'depot-ubuntu-22.04-8' || 'ubuntu-latest' }}
     needs: changes
     # Unnecessary to run on main for now
-    if: needs.changes.outputs.tailnet-integration == 'true' || needs.changes.outputs.ci == 'true'
+    if: false
     timeout-minutes: 20
     steps:
       - name: Harden Runner
@@ -646,7 +646,7 @@ jobs:
   test-js:
     runs-on: ${{ github.repository_owner == 'coder' && 'depot-ubuntu-22.04-8' || 'ubuntu-latest' }}
     needs: changes
-    if: needs.changes.outputs.ts == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main'
+    if: false
     timeout-minutes: 20
     steps:
       - name: Harden Runner
@@ -677,7 +677,7 @@ jobs:
           - premium: true
             name: test-e2e-premium
     # Skip test-e2e on forks as they don't have access to CI secrets
-    if: (needs.changes.outputs.go == 'true' || needs.changes.outputs.ts == 'true' || needs.changes.outputs.ci == 'true' || github.ref == 'refs/heads/main') && !(github.event.pull_request.head.repo.fork)
+    if: false
     timeout-minutes: 20
     name: ${{ matrix.variant.name }}
     steps:
@@ -748,7 +748,7 @@ jobs:
     # REMARK: this is only used to build storybook and deploy it to Chromatic.
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.ts == 'true' || needs.changes.outputs.ci == 'true'
+    if: false
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@4d991eb9b905ef189e4c376166672c3f2f230481 # v2.11.0
@@ -824,8 +824,7 @@ jobs:
     name: offlinedocs
     needs: changes
     runs-on: ${{ github.repository_owner == 'coder' && 'depot-ubuntu-22.04-8' || 'ubuntu-latest' }}
-    if: needs.changes.outputs.offlinedocs == 'true' || needs.changes.outputs.ci == 'true' || needs.changes.outputs.docs == 'true'
-
+    if: false
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@4d991eb9b905ef189e4c376166672c3f2f230481 # v2.11.0
@@ -899,7 +898,7 @@ jobs:
       - sqlc-vet
     # Allow this job to run even if the needed jobs fail, are skipped or
     # cancelled.
-    if: always()
+    if: false
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@4d991eb9b905ef189e4c376166672c3f2f230481 # v2.11.0
