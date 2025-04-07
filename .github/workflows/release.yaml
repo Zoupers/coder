@@ -358,16 +358,15 @@ jobs:
         if: steps.image-base-tag.outputs.tag != ''
         run: mkdir base-build-context
 
-      - name: Install depot.dev CLI
-        if: steps.image-base-tag.outputs.tag != ''
-        uses: depot/setup-action@b0b1ea4f69e92ebf5dea3f8713a1b0c37b2126a5 # v1.6.0
+      # - name: Install depot.dev CLI
+      #   if: steps.image-base-tag.outputs.tag != ''
+      #   uses: depot/setup-action@b0b1ea4f69e92ebf5dea3f8713a1b0c37b2126a5 # v1.6.0
 
       # This uses OIDC authentication, so no auth variables are required.
       - name: Build base Docker image via depot.dev
         if: steps.image-base-tag.outputs.tag != ''
-        uses: depot/build-push-action@636daae76684e38c301daa0c5eca1c095b24e780 # v1.14.0
+        uses: docker/build-push-action@v6 # v1.14.0
         with:
-          project: wl5hnrrkns
           context: base-build-context
           file: scripts/Dockerfile.base
           platforms: linux/amd64,linux/arm64,linux/arm/v7
