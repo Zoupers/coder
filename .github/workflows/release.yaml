@@ -336,9 +336,11 @@ jobs:
           JSIGN_PATH: /tmp/jsign-6.0.jar
 
       - name: Delete Apple Developer certificate and API key
+        if: false
         run: rm -f /tmp/{apple_cert.p12,apple_cert_password.txt,apple_apikey.p8}
 
       - name: Delete Windows EV Signing Cert
+        if: false
         run: rm /tmp/ev_cert.pem
 
       - name: Determine base image tag
