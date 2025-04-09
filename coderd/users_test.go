@@ -10,12 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/serpent"
+
 	"github.com/coder/coder/v2/coderd"
 	"github.com/coder/coder/v2/coderd/coderdtest/oidctest"
 	"github.com/coder/coder/v2/coderd/notifications"
 	"github.com/coder/coder/v2/coderd/notifications/notificationstest"
 	"github.com/coder/coder/v2/coderd/rbac/policy"
-	"github.com/coder/serpent"
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
@@ -1969,6 +1970,86 @@ func TestPostTokens(t *testing.T) {
 	require.NotNil(t, apiKey)
 	require.GreaterOrEqual(t, len(apiKey.Key), 2)
 	require.NoError(t, err)
+}
+
+func TestUserTerminalFont(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid font", func(t *testing.T) {
+		t.Parallel()
+
+		adminClient := coderdtest.New(t, nil)
+		firstUser := coderdtest.CreateFirstUser(t, adminClient)
+		client, _ := coderdtest.CreateAnotherUser(t, adminClient, firstUser.OrganizationID)
+
+		ctx, cancel := context.WithTimeout(context.Background(), testutil.WaitLong)
+		defer cancel()
+
+		// given
+		initial, err := client.GetUserAppearanceSettings(ctx, "me")
+		require.NoError(t, err)
+		require.Equal(t, codersdk.TerminalFontName(""), initial.TerminalFont)
+
+		// when
+		updated, err := client.UpdateUserAppearanceSettings(ctx, "me", codersdk.UpdateUserAppearanceSettingsRequest{
+			ThemePreference: "light",
+			TerminalFont:    "fira-code",
+		})
+		require.NoError(t, err)
+
+		// then
+		require.Equal(t, codersdk.TerminalFontFiraCode, updated.TerminalFont)
+	})
+
+	t.Run("unsupported font", func(t *testing.T) {
+		t.Parallel()
+
+		adminClient := coderdtest.New(t, nil)
+		firstUser := coderdtest.CreateFirstUser(t, adminClient)
+		client, _ := coderdtest.CreateAnotherUser(t, adminClient, firstUser.OrganizationID)
+
+		ctx, cancel := context.WithTimeout(context.Background(), testutil.WaitLong)
+		defer cancel()
+
+		// given
+		initial, err := client.GetUserAppearanceSettings(ctx, "me")
+		require.NoError(t, err)
+		require.Equal(t, codersdk.TerminalFontName(""), initial.TerminalFont)
+
+		// when
+		_, err = client.UpdateUserAppearanceSettings(ctx, "me", codersdk.UpdateUserAppearanceSettingsRequest{
+			ThemePreference: "light",
+			TerminalFont:    "foobar",
+		})
+
+		// then
+		require.Error(t, err)
+	})
+
+	t.Run("undefined font is not ok", func(t *testing.T) {
+		t.Parallel()
+
+		adminClient := coderdtest.New(t, nil)
+		firstUser := coderdtest.CreateFirstUser(t, adminClient)
+		client, _ := coderdtest.CreateAnotherUser(t, adminClient, firstUser.OrganizationID)
+
+		ctx, cancel := context.WithTimeout(context.Background(), testutil.WaitLong)
+		defer cancel()
+
+		// given
+		initial, err := client.GetUserAppearanceSettings(ctx, "me")
+		require.NoError(t, err)
+		require.Equal(t, codersdk.TerminalFontName(""), initial.TerminalFont)
+
+		// when
+		_, err = client.UpdateUserAppearanceSettings(ctx, "me", codersdk.UpdateUserAppearanceSettingsRequest{
+			ThemePreference: "light",
+			TerminalFont:    "",
+		})
+
+		// then
+		require.Error(t, err)
+	})
 }
 
 func TestWorkspacesByUser(t *testing.T) {

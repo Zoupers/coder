@@ -23,6 +23,8 @@ import (
 	"tailscale.com/tailcfg"
 
 	"cdr.dev/slog"
+	"github.com/coder/websocket"
+
 	"github.com/coder/coder/v2/coderd/agentapi"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/db2sdk"
@@ -34,6 +36,7 @@ import (
 	"github.com/coder/coder/v2/coderd/jwtutils"
 	"github.com/coder/coder/v2/coderd/rbac"
 	"github.com/coder/coder/v2/coderd/rbac/policy"
+	"github.com/coder/coder/v2/coderd/telemetry"
 	maputil "github.com/coder/coder/v2/coderd/util/maps"
 	"github.com/coder/coder/v2/coderd/wspubsub"
 	"github.com/coder/coder/v2/codersdk"
@@ -42,7 +45,6 @@ import (
 	"github.com/coder/coder/v2/codersdk/wsjson"
 	"github.com/coder/coder/v2/tailnet"
 	"github.com/coder/coder/v2/tailnet/proto"
-	"github.com/coder/websocket"
 )
 
 // @Summary Get workspace agent by ID
@@ -91,6 +93,20 @@ func (api *API) workspaceAgent(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	appIDs := []uuid.UUID{}
+	for _, app := range dbApps {
+		appIDs = append(appIDs, app.ID)
+	}
+	// nolint:gocritic // This is a system restricted operation.
+	statuses, err := api.Database.GetWorkspaceAppStatusesByAppIDs(dbauthz.AsSystemRestricted(ctx), appIDs)
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: "Internal error fetching workspace app statuses.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
 	resource, err := api.Database.GetWorkspaceResourceByID(ctx, workspaceAgent.ResourceID)
 	if err != nil {
 		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
@@ -125,7 +141,7 @@ func (api *API) workspaceAgent(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	apiAgent, err := db2sdk.WorkspaceAgent(
-		api.DERPMap(), *api.TailnetCoordinator.Load(), workspaceAgent, db2sdk.Apps(dbApps, workspaceAgent, owner.Username, workspace), convertScripts(scripts), convertLogSources(logSources), api.AgentInactiveDisconnectTimeout,
+		api.DERPMap(), *api.TailnetCoordinator.Load(), workspaceAgent, db2sdk.Apps(dbApps, statuses, workspaceAgent, owner.Username, workspace), convertScripts(scripts), convertLogSources(logSources), api.AgentInactiveDisconnectTimeout,
 		api.DeploymentValues.AgentFallbackTroubleshootingURL.String(),
 	)
 	if err != nil {
@@ -213,11 +229,12 @@ func (api *API) patchWorkspaceAgentLogs(rw http.ResponseWriter, r *http.Request)
 	}
 
 	logs, err := api.Database.InsertWorkspaceAgentLogs(ctx, database.InsertWorkspaceAgentLogsParams{
-		AgentID:      workspaceAgent.ID,
-		CreatedAt:    dbtime.Now(),
-		Output:       output,
-		Level:        level,
-		LogSourceID:  req.LogSourceID,
+		AgentID:     workspaceAgent.ID,
+		CreatedAt:   dbtime.Now(),
+		Output:      output,
+		Level:       level,
+		LogSourceID: req.LogSourceID,
+		// #nosec G115 - Log output length is limited and fits in int32
 		OutputLength: int32(outputLength),
 	})
 	if err != nil {
@@ -293,6 +310,81 @@ func (api *API) patchWorkspaceAgentLogs(rw http.ResponseWriter, r *http.Request)
 			AgentID:     &workspaceAgent.ID,
 		})
 	}
+
+	httpapi.Write(ctx, rw, http.StatusOK, nil)
+}
+
+// @Summary Patch workspace agent app status
+// @ID patch-workspace-agent-app-status
+// @Security CoderSessionToken
+// @Accept json
+// @Produce json
+// @Tags Agents
+// @Param request body agentsdk.PatchAppStatus true "app status"
+// @Success 200 {object} codersdk.Response
+// @Router /workspaceagents/me/app-status [patch]
+func (api *API) patchWorkspaceAgentAppStatus(rw http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	workspaceAgent := httpmw.WorkspaceAgent(r)
+
+	var req agentsdk.PatchAppStatus
+	if !httpapi.Read(ctx, rw, r, &req) {
+		return
+	}
+
+	app, err := api.Database.GetWorkspaceAppByAgentIDAndSlug(ctx, database.GetWorkspaceAppByAgentIDAndSlugParams{
+		AgentID: workspaceAgent.ID,
+		Slug:    req.AppSlug,
+	})
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: "Failed to get workspace app.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
+	workspace, err := api.Database.GetWorkspaceByAgentID(ctx, workspaceAgent.ID)
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+			Message: "Failed to get workspace.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
+	// nolint:gocritic // This is a system restricted operation.
+	_, err = api.Database.InsertWorkspaceAppStatus(dbauthz.AsSystemRestricted(ctx), database.InsertWorkspaceAppStatusParams{
+		ID:          uuid.New(),
+		CreatedAt:   dbtime.Now(),
+		WorkspaceID: workspace.ID,
+		AgentID:     workspaceAgent.ID,
+		AppID:       app.ID,
+		State:       database.WorkspaceAppStatusState(req.State),
+		Message:     req.Message,
+		Uri: sql.NullString{
+			String: req.URI,
+			Valid:  req.URI != "",
+		},
+		Icon: sql.NullString{
+			String: req.Icon,
+			Valid:  req.Icon != "",
+		},
+		NeedsUserAttention: req.NeedsUserAttention,
+	})
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: "Failed to insert workspace app status.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
+	api.publishWorkspaceUpdate(ctx, workspace.OwnerID, wspubsub.WorkspaceEvent{
+		Kind:        wspubsub.WorkspaceEventKindAgentAppStatusUpdate,
+		WorkspaceID: workspace.ID,
+		AgentID:     &workspaceAgent.ID,
+	})
 
 	httpapi.Write(ctx, rw, http.StatusOK, nil)
 }
@@ -977,10 +1069,11 @@ func (api *API) handleResumeToken(ctx context.Context, rw http.ResponseWriter, r
 		peerID, err = api.Options.CoordinatorResumeTokenProvider.VerifyResumeToken(ctx, resumeToken)
 		// If the token is missing the key ID, it's probably an old token in which
 		// case we just want to generate a new peer ID.
-		if xerrors.Is(err, jwtutils.ErrMissingKeyID) {
+		switch {
+		case xerrors.Is(err, jwtutils.ErrMissingKeyID):
 			peerID = uuid.New()
 			err = nil
-		} else if err != nil {
+		case err != nil:
 			httpapi.Write(ctx, rw, http.StatusUnauthorized, codersdk.Response{
 				Message: workspacesdk.CoordinateAPIInvalidResumeToken,
 				Detail:  err.Error(),
@@ -989,7 +1082,7 @@ func (api *API) handleResumeToken(ctx context.Context, rw http.ResponseWriter, r
 				},
 			})
 			return peerID, err
-		} else {
+		default:
 			api.Logger.Debug(ctx, "accepted coordinate resume token for peer",
 				slog.F("peer_id", peerID.String()))
 		}
@@ -1050,7 +1143,7 @@ func (api *API) workspaceAgentPostLogSource(rw http.ResponseWriter, r *http.Requ
 // convertProvisionedApps converts applications that are in the middle of provisioning process.
 // It means that they may not have an agent or workspace assigned (dry-run job).
 func convertProvisionedApps(dbApps []database.WorkspaceApp) []codersdk.WorkspaceApp {
-	return db2sdk.Apps(dbApps, database.WorkspaceAgent{}, "", database.Workspace{})
+	return db2sdk.Apps(dbApps, []database.WorkspaceAppStatus{}, database.WorkspaceAgent{}, "", database.Workspace{})
 }
 
 func convertLogSources(dbLogSources []database.WorkspaceAgentLogSource) []codersdk.WorkspaceAgentLogSource {
@@ -1094,7 +1187,29 @@ func convertScripts(dbScripts []database.WorkspaceAgentScript) []codersdk.Worksp
 // @Param workspaceagent path string true "Workspace agent ID" format(uuid)
 // @Router /workspaceagents/{workspaceagent}/watch-metadata [get]
 // @x-apidocgen {"skip": true}
-func (api *API) watchWorkspaceAgentMetadata(rw http.ResponseWriter, r *http.Request) {
+// @Deprecated Use /workspaceagents/{workspaceagent}/watch-metadata-ws instead
+func (api *API) watchWorkspaceAgentMetadataSSE(rw http.ResponseWriter, r *http.Request) {
+	api.watchWorkspaceAgentMetadata(rw, r, httpapi.ServerSentEventSender)
+}
+
+// @Summary Watch for workspace agent metadata updates via WebSockets
+// @ID watch-for-workspace-agent-metadata-updates-via-websockets
+// @Security CoderSessionToken
+// @Produce json
+// @Tags Agents
+// @Success 200 {object} codersdk.ServerSentEvent
+// @Param workspaceagent path string true "Workspace agent ID" format(uuid)
+// @Router /workspaceagents/{workspaceagent}/watch-metadata-ws [get]
+// @x-apidocgen {"skip": true}
+func (api *API) watchWorkspaceAgentMetadataWS(rw http.ResponseWriter, r *http.Request) {
+	api.watchWorkspaceAgentMetadata(rw, r, httpapi.OneWayWebSocketEventSender)
+}
+
+func (api *API) watchWorkspaceAgentMetadata(
+	rw http.ResponseWriter,
+	r *http.Request,
+	connect httpapi.EventSender,
+) {
 	// Allow us to interrupt watch via cancel.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -1159,7 +1274,7 @@ func (api *API) watchWorkspaceAgentMetadata(rw http.ResponseWriter, r *http.Requ
 	//nolint:ineffassign // Release memory.
 	initialMD = nil
 
-	sseSendEvent, sseSenderClosed, err := httpapi.ServerSentEventSender(rw, r)
+	sendEvent, senderClosed, err := connect(rw, r)
 	if err != nil {
 		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
 			Message: "Internal error setting up server-sent events.",
@@ -1170,14 +1285,14 @@ func (api *API) watchWorkspaceAgentMetadata(rw http.ResponseWriter, r *http.Requ
 	// Prevent handler from returning until the sender is closed.
 	defer func() {
 		cancel()
-		<-sseSenderClosed
+		<-senderClosed
 	}()
 	// Synchronize cancellation from SSE -> context, this lets us simplify the
 	// cancellation logic.
 	go func() {
 		select {
 		case <-ctx.Done():
-		case <-sseSenderClosed:
+		case <-senderClosed:
 			cancel()
 		}
 	}()
@@ -1189,7 +1304,7 @@ func (api *API) watchWorkspaceAgentMetadata(rw http.ResponseWriter, r *http.Requ
 
 		log.Debug(ctx, "sending metadata", "num", len(values))
 
-		_ = sseSendEvent(ctx, codersdk.ServerSentEvent{
+		_ = sendEvent(codersdk.ServerSentEvent{
 			Type: codersdk.ServerSentEventTypeData,
 			Data: convertWorkspaceAgentMetadata(values),
 		})
@@ -1221,7 +1336,7 @@ func (api *API) watchWorkspaceAgentMetadata(rw http.ResponseWriter, r *http.Requ
 				if err != nil {
 					if !database.IsQueryCanceledError(err) {
 						log.Error(ctx, "failed to get metadata", slog.Error(err))
-						_ = sseSendEvent(ctx, codersdk.ServerSentEvent{
+						_ = sendEvent(codersdk.ServerSentEvent{
 							Type: codersdk.ServerSentEventTypeError,
 							Data: codersdk.Response{
 								Message: "Failed to get metadata.",
@@ -1635,6 +1750,35 @@ func (api *API) tailnetRPCConn(rw http.ResponseWriter, r *http.Request) {
 	defer wsNetConn.Close()
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
+	// Get user ID for telemetry
+	apiKey := httpmw.APIKey(r)
+	userID := apiKey.UserID.String()
+
+	// Store connection telemetry event
+	now := time.Now()
+	connectionTelemetryEvent := telemetry.UserTailnetConnection{
+		ConnectedAt:         now,
+		DisconnectedAt:      nil,
+		UserID:              userID,
+		PeerID:              peerID.String(),
+		DeviceID:            nil,
+		DeviceOS:            nil,
+		CoderDesktopVersion: nil,
+	}
+
+	fillCoderDesktopTelemetry(r, &connectionTelemetryEvent, api.Logger)
+	api.Telemetry.Report(&telemetry.Snapshot{
+		UserTailnetConnections: []telemetry.UserTailnetConnection{connectionTelemetryEvent},
+	})
+	defer func() {
+		// Update telemetry event with disconnection time
+		disconnectTime := time.Now()
+		connectionTelemetryEvent.DisconnectedAt = &disconnectTime
+		api.Telemetry.Report(&telemetry.Snapshot{
+			UserTailnetConnections: []telemetry.UserTailnetConnection{connectionTelemetryEvent},
+		})
+	}()
+
 	go httpapi.Heartbeat(ctx, conn)
 	err = api.TailnetClientService.ServeClient(ctx, version, wsNetConn, tailnet.StreamID{
 		Name: "client",
@@ -1649,6 +1793,34 @@ func (api *API) tailnetRPCConn(rw http.ResponseWriter, r *http.Request) {
 	if err != nil && !xerrors.Is(err, io.EOF) && !xerrors.Is(err, context.Canceled) {
 		_ = conn.Close(websocket.StatusInternalError, err.Error())
 		return
+	}
+}
+
+// fillCoderDesktopTelemetry fills out the provided event based on a Coder Desktop telemetry header on the request, if
+// present.
+func fillCoderDesktopTelemetry(r *http.Request, event *telemetry.UserTailnetConnection, logger slog.Logger) {
+	// Parse desktop telemetry from header if it exists
+	desktopTelemetryHeader := r.Header.Get(codersdk.CoderDesktopTelemetryHeader)
+	if desktopTelemetryHeader != "" {
+		var telemetryData codersdk.CoderDesktopTelemetry
+		if err := telemetryData.FromHeader(desktopTelemetryHeader); err == nil {
+			// Only set fields if they aren't empty
+			if telemetryData.DeviceID != "" {
+				event.DeviceID = &telemetryData.DeviceID
+			}
+			if telemetryData.DeviceOS != "" {
+				event.DeviceOS = &telemetryData.DeviceOS
+			}
+			if telemetryData.CoderDesktopVersion != "" {
+				event.CoderDesktopVersion = &telemetryData.CoderDesktopVersion
+			}
+			logger.Debug(r.Context(), "received desktop telemetry",
+				slog.F("device_id", telemetryData.DeviceID),
+				slog.F("device_os", telemetryData.DeviceOS),
+				slog.F("desktop_version", telemetryData.CoderDesktopVersion))
+		} else {
+			logger.Warn(r.Context(), "failed to parse desktop telemetry header", slog.Error(err))
+		}
 	}
 }
 

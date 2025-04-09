@@ -3,6 +3,7 @@ package terraform
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/awalterschulze/gographviz"
@@ -42,7 +43,7 @@ type agentAttributes struct {
 	ID              string            `mapstructure:"id"`
 	Token           string            `mapstructure:"token"`
 	Env             map[string]string `mapstructure:"env"`
-	// Deprecated, but remains here for backwards compatibility.
+	// Deprecated: but remains here for backwards compatibility.
 	StartupScript                string `mapstructure:"startup_script"`
 	StartupScriptBehavior        string `mapstructure:"startup_script_behavior"`
 	StartupScriptTimeoutSeconds  int32  `mapstructure:"startup_script_timeout"`
@@ -614,6 +615,7 @@ func ConvertState(ctx context.Context, modules []*tfjson.StateModule, rawGraph s
 						continue
 					}
 					agent.Devcontainers = append(agent.Devcontainers, &proto.Devcontainer{
+						Name:            resource.Name,
 						WorkspaceFolder: attrs.WorkspaceFolder,
 						ConfigPath:      attrs.ConfigPath,
 					})
@@ -756,8 +758,9 @@ func ConvertState(ctx context.Context, modules []*tfjson.StateModule, rawGraph s
 			DefaultValue: param.Default,
 			Icon:         param.Icon,
 			Required:     !param.Optional,
-			Order:        int32(param.Order),
-			Ephemeral:    param.Ephemeral,
+			// #nosec G115 - Safe conversion as parameter order value is expected to be within int32 range
+			Order:     int32(param.Order),
+			Ephemeral: param.Ephemeral,
 		}
 		if len(param.Validation) == 1 {
 			protoParam.ValidationRegex = param.Validation[0].Regex
@@ -881,10 +884,24 @@ func ConvertState(ctx context.Context, modules []*tfjson.StateModule, rawGraph s
 			)
 		}
 
+		if len(preset.Prebuilds) != 1 {
+			logger.Warn(
+				ctx,
+				"coder_workspace_preset must have exactly one prebuild block",
+			)
+		}
+		var prebuildInstances int32
+		if len(preset.Prebuilds) > 0 {
+			prebuildInstances = int32(math.Min(math.MaxInt32, float64(preset.Prebuilds[0].Instances)))
+		}
 		protoPreset := &proto.Preset{
 			Name:       preset.Name,
 			Parameters: presetParameters,
+			Prebuild: &proto.Prebuild{
+				Instances: prebuildInstances,
+			},
 		}
+
 		if slice.Contains(duplicatedPresetNames, preset.Name) {
 			duplicatedPresetNames = append(duplicatedPresetNames, preset.Name)
 		}
@@ -940,6 +957,7 @@ func ConvertState(ctx context.Context, modules []*tfjson.StateModule, rawGraph s
 }
 
 func PtrInt32(number int) *int32 {
+	// #nosec G115 - Safe conversion as the number is expected to be within int32 range
 	n := int32(number)
 	return &n
 }
